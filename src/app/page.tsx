@@ -153,8 +153,8 @@ async function onSubmit(e: React.FormEvent) {
 }
 
 async function resizeIfNeeded(file: File, maxWidth: number): Promise<File> {
-  // Quick guard: only process large images and common image types
-  if (!/^image\\/(jpe?g|png|webp)$/i.test(file.type)) return file;
+ // Quick guard: only process large images and common image types
+if (!/^image\/(jpe?g|png|webp)$/i.test(file.type)) return file;
 
   // Create an image bitmap
   const img = await createImageBitmap(file);
