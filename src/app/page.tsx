@@ -1,103 +1,211 @@
-import Image from "next/image";
+// src/app/page.tsx
+"use client";
 
-export default function Home() {
+import { useRef, useState } from "react";
+
+export default function Page() {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const url = URL.createObjectURL(f);
+    setPreview(url);
+    setResult(null);
+    setError(null);
+  }
+
+  async function onSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    setResult(null);
+
+    const f = fileRef.current?.files?.[0];
+    if (!f) {
+      setError("Please choose or take a photo of the label.");
+      setLoading(false);
+      return;
+    }
+
+    const fd = new FormData();
+    fd.append("image", f);
+
+    try {
+      const res = await fetch("/api/analyze", { method: "POST", body: fd });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Request failed");
+      setResult(json.data);
+    } catch (err: any) {
+      setError(err.message || "Something went wrong");
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              src/app/page.tsx
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+    <main className="min-h-screen bg-gray-50 text-gray-900">
+      <div className="max-w-2xl mx-auto p-6 space-y-6">
+        <header className="space-y-2">
+          <h1 className="text-3xl font-semibold">Wine Label → ChatGPT</h1>
+          <p className="text-sm text-gray-600">
+            Snap or upload a bottle label. We send the photo to a vision model
+            and return structured info: price estimate, drink window & tasting
+            notes. No keys are stored client-side.
+          </p>
+        </header>
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
+        <form onSubmit={onSubmit} className="space-y-4">
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/*"
+            capture="environment"
+            onChange={onPickFile}
+            className="block w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-gray-900 file:text-white hover:file:bg-black"
+          />
+
+          {preview && (
+            <img
+              src={preview}
+              alt="preview"
+              className="w-full rounded-xl shadow border"
             />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
+          )}
+
+          <button
+            disabled={loading}
+            className="px-4 py-2 rounded-xl bg-black text-white disabled:opacity-50"
           >
-            Read our docs
-          </a>
+            {loading ? "Analyzing…" : "Analyze Label"}
+          </button>
+        </form>
+
+        {error && (
+          <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-800">
+            {error}
+          </div>
+        )}
+
+        {result && <ResultCard data={result} />}
+
+        <footer className="text-xs text-gray-500">
+          Tip: Prices are indicative; verify locally (Wine-Searcher, retailer).
+        </footer>
+      </div>
+    </main>
+  );
+}
+
+function ResultCard({ data }: { data: any }) {
+  const r = data || {};
+  const rl = r.recognizedLabel || {};
+  const t = r.tastingNotes || {};
+  const w2 = t.wsetLevel2 || {};
+  const dw = r.drinkWindow || {};
+  const p = r.priceEstimate || {};
+
+  return (
+    <section className="space-y-4">
+      <div className="grid gap-3 p-4 rounded-2xl bg-white shadow">
+        <h2 className="text-xl font-semibold">Recognized Label</h2>
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          <Field k="Producer" v={rl.producer} />
+          <Field k="Wine" v={rl.wine} />
+          <Field k="Appellation" v={rl.appellation} />
+          <Field k="Region" v={rl.region} />
+          <Field k="Country" v={rl.country} />
+          <Field k="Vintage" v={rl.vintage} />
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
+      </div>
+
+      <div className="grid gap-3 p-4 rounded-2xl bg-white shadow">
+        <h2 className="text-xl font-semibold">Tasting Notes</h2>
+        <PillList label="Nose" items={t.nose || []} />
+        <PillList label="Palate" items={t.palate || []} />
+        {t.finish && (
+          <div className="text-sm">
+            <span className="font-medium">Finish:</span> {t.finish}
+          </div>
+        )}
+        <div className="text-sm grid grid-cols-2 gap-2">
+          <Field k="Sweetness" v={w2.sweetness} />
+          <Field k="Acidity" v={w2.acidity} />
+          <Field k="Tannin" v={w2.tannin} />
+          <Field k="Body" v={w2.body} />
+          <Field k="Alcohol" v={w2.alcohol} />
+          <Field k="Finish Length" v={w2.finishLength} />
+        </div>
+      </div>
+
+      <div className="grid gap-3 p-4 rounded-2xl bg-white shadow">
+        <h2 className="text-xl font-semibold">Drink Window</h2>
+        <div className="text-sm grid grid-cols-2 gap-2">
+          <Field k="Drink Now" v={String(dw.drinkNow)} />
+          <Field k="From" v={dw.from} />
+          <Field k="To" v={dw.to} />
+          <Field k="Peak From" v={dw.peakFrom} />
+          <Field k="Peak To" v={dw.peakTo} />
+          <Field k="Decant" v={dw.decant} />
+        </div>
+      </div>
+
+      <div className="grid gap-3 p-4 rounded-2xl bg-white shadow">
+        <h2 className="text-xl font-semibold">Price (estimate)</h2>
+        <div className="text-sm grid grid-cols-2 gap-2">
+          <Field k="Currency" v={p.currency} />
+          <Field
+            k="Range"
+            v={
+              p.low != null && p.high != null ? `${p.low} – ${p.high}` : "—"
+            }
           />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+          <Field k="Confidence" v={p.confidence} />
+        </div>
+        {p.note && <div className="text-xs text-gray-600">{p.note}</div>}
+      </div>
+
+      {Array.isArray(r.caveats) && r.caveats.length > 0 && (
+        <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-2xl text-sm">
+          <div className="font-medium mb-1">Caveats</div>
+          <ul className="list-disc pl-5 space-y-1">
+            {r.caveats.map((c: string, i: number) => (
+              <li key={i}>{c}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Field({ k, v }: { k: string; v: any }) {
+  return (
+    <div>
+      <span className="font-medium">{k}:</span> {v ?? "—"}
+    </div>
+  );
+}
+
+function PillList({ label, items }: { label: string; items: string[] }) {
+  if (!items || items.length === 0) return null;
+  return (
+    <div className="text-sm">
+      <div className="font-medium mb-2">{label}</div>
+      <div className="flex flex-wrap gap-2">
+        {items.map((it, i) => (
+          <span
+            key={i}
+            className="px-2 py-1 bg-gray-100 rounded-full border text-gray-800"
+          >
+            {it}
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
