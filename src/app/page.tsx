@@ -152,6 +152,38 @@ async function onSubmit(e: React.FormEvent) {
   }
 }
 
+async function resizeIfNeeded(file: File, maxWidth: number): Promise<File> {
+  // Quick guard: only process large images and common image types
+  if (!/^image\\/(jpe?g|png|webp)$/i.test(file.type)) return file;
+
+  // Create an image bitmap
+  const img = await createImageBitmap(file);
+  if (img.width <= maxWidth) return file; // no need to resize
+
+  const scale = maxWidth / img.width;
+  const targetW = Math.round(img.width * scale);
+  const targetH = Math.round(img.height * scale);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = targetW;
+  canvas.height = targetH;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return file;
+  ctx.drawImage(img, 0, 0, targetW, targetH);
+
+  // Export as JPEG for size; tweak quality if you like
+  const blob: Blob = await new Promise((resolve) =>
+    canvas.toBlob((b) => resolve(b as Blob), "image/jpeg", 0.9)
+  );
+
+  // Construct a File so FormData keeps a filename
+  return new File([blob], (file.name || "label").replace(/\\.[^.]+$/, "") + ".jpg", {
+    type: "image/jpeg",
+    lastModified: Date.now(),
+  });
+}
+
 
   return (
     <main className="min-h-screen bg-gray-50 text-gray-900">
