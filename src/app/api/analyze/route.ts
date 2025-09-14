@@ -29,7 +29,14 @@ const jsonSchema = {
       finishLength: "",
     },
   },
-  drinkWindow: {
+  
+aromasAndFlavours: {
+  primary: [] as string[],
+  secondary: [] as string[],
+  tertiary: [] as string[],
+},
+
+drinkWindow: {
     drinkNow: false,
     from: "",
     to: "",
@@ -53,6 +60,7 @@ Do not invent precise facts you cannot justify from the label (e.g., ABV, grapes
 For price, give a broad *typical* retail range for this wine style/region/vintage in the user's likely market (UK/Europe) with low/med/high confidence.
 For drinkWindow, provide a realistic now/peak/from/to and a simple decant recommendation for tonight.
 Populate WSET Level 2 estimates (sweetness, acidity, tannin, body, alcohol, finishLength) based on region/style and vintage.
+Also return an 'aromasAndFlavours' section, with primary, secondary, and tertiary descriptors, following WSET Level 2 classification.
 `;
 
 export async function POST(req: Request) {

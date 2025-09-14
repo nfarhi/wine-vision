@@ -40,11 +40,26 @@ export default function Page() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Request failed");
       setResult(json.data);
-    } catch (err: any) {
-      setError(err.message || "Something went wrong");
-    } finally {
-      setLoading(false);
-    }
+    } catch (err: unknown) {
+  let msg = "Something went wrong.";
+  if (err instanceof Error) {
+    msg = err.message;
+  }
+
+  if (/429/.test(msg) || /quota/i.test(msg)) {
+    msg =
+      "⚠️ You’ve used up your OpenAI credits or hit a rate limit. Please check your OpenAI billing and try again later.";
+  } else if (/401/.test(msg) || /unauthorized/i.test(msg)) {
+    msg =
+      "⚠️ API key problem. Check your OPENAI_API_KEY in Vercel → Project → Settings → Environment Variables.";
+  } else if (/image/i.test(msg)) {
+    msg = "⚠️ Please upload a wine label image before analyzing.";
+  }
+
+  setError(msg);
+} finally {
+  setLoading(false);
+}
   }
 
   return (
@@ -142,10 +157,17 @@ function ResultCard({ data }: { data: any }) {
         </div>
       </div>
 
+<div className="grid gap-3 p-4 rounded-2xl bg-white shadow">
+  <h2 className="text-xl font-semibold">Aromas and Flavours</h2>
+  <PillList label="Primary" items={r.aromasAndFlavours?.primary || []} />
+  <PillList label="Secondary" items={r.aromasAndFlavours?.secondary || []} />
+  <PillList label="Tertiary" items={r.aromasAndFlavours?.tertiary || []} />
+</div>
+
+
       <div className="grid gap-3 p-4 rounded-2xl bg-white shadow">
         <h2 className="text-xl font-semibold">Drink Window</h2>
         <div className="text-sm grid grid-cols-2 gap-2">
-          <Field k="Drink Now" v={String(dw.drinkNow)} />
           <Field k="From" v={dw.from} />
           <Field k="To" v={dw.to} />
           <Field k="Peak From" v={dw.peakFrom} />
