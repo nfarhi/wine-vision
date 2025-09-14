@@ -81,49 +81,77 @@ export default function Page() {
     setError(null);
   }
 
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true);
-    setError(null);
-    setResult(null);
+async function onSubmit(e: React.FormEvent) {
+  e.preventDefault();
+  setLoading(true);
+  setError(null);
+  setResult(null);
 
-    const f = fileRef.current?.files?.[0];
-    if (!f) {
-      setError("⚠️ Please upload a wine label image before analyzing.");
-      setLoading(false);
-      return;
-    }
+  const file = fileRef.current?.files?.[0];
+  if (!file) {
+    setError("⚠️ Please upload a wine label image before analyzing.");
+    setLoading(false);
+    return;
+  }
+
+  try {
+    // Optional: downscale large images to avoid 413 / reduce upload time
+    const processed = await resizeIfNeeded(file, 1600); // max width 1600px
 
     const fd = new FormData();
-    fd.append("image", f);
+    fd.append("image", processed, processed.name || file.name || "label.jpg");
 
-    try {
-      const res = await fetch("/api/analyze", { method: "POST", body: fd });
-      const json = await res.json();
-      if (!res.ok) {
-        // bubble up the API's message if present
-        throw new Error(typeof json?.error === "string" ? json.error : "Request failed");
+    const res = await fetch("/api/analyze", { method: "POST", body: fd });
+
+    // Read as text first so we can safely handle non-JSON (HTML error pages, empty body, etc.)
+    const contentType = res.headers.get("content-type") || "";
+    const text = await res.text();
+
+    let payload: unknown = null;
+    if (contentType.includes("application/json") && text) {
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        // fall through; we'll handle as non-JSON below
       }
-      setResult(json.data as ApiResult);
-    } catch (err: unknown) {
-      let msg = "Something went wrong.";
-      if (err instanceof Error) msg = err.message;
-
-      if (/429/.test(msg) || /quota/i.test(msg)) {
-        msg =
-          "⚠️ You’ve used up your OpenAI credits or hit a rate limit. Please check your OpenAI billing and try again later.";
-      } else if (/401/.test(msg) || /unauthorized/i.test(msg)) {
-        msg =
-          "⚠️ API key problem. Check your OPENAI_API_KEY in Vercel → Project → Settings → Environment Variables.";
-      } else if (/No image supplied/i.test(msg)) {
-        msg = "⚠️ Please upload a wine label image before analyzing.";
-      }
-
-      setError(msg);
-    } finally {
-      setLoading(false);
     }
+
+    if (!res.ok) {
+      // Try to extract server error message if present
+      const msg =
+        (typeof (payload as any)?.error === "string" && (payload as any).error) ||
+        (text && text.slice(0, 300)) ||
+        `HTTP ${res.status}`;
+      throw new Error(msg);
+    }
+
+    const data = (payload as any)?.data;
+    if (!data) {
+      throw new Error("Empty response from server.");
+    }
+
+    setResult(data);
+  } catch (err: unknown) {
+    let msg = err instanceof Error ? err.message : "Something went wrong.";
+
+    if (/payload too large|entity too large|413/i.test(msg)) {
+      msg = "⚠️ The image is too large for the server. Try a smaller photo or let me compress it.";
+    } else if (/quota/i.test(msg) || /429/.test(msg)) {
+      msg =
+        "⚠️ You’ve used up your OpenAI credits or hit a rate limit. Please check your OpenAI billing and try again later.";
+    } else if (/OPENAI_API_KEY/i.test(msg) || /401|unauthorized/i.test(msg)) {
+      msg =
+        "⚠️ API key problem. Check your OPENAI_API_KEY in Vercel → Project → Settings → Environment Variables.";
+    } else if (/No image supplied/i.test(msg)) {
+      msg = "⚠️ Please upload a wine label image before analyzing.";
+    }
+
+    setError(msg);
+  } finally {
+    setLoading(false);
   }
+}
+
 
   return (
     <main className="min-h-screen bg-gray-50 text-gray-900">
