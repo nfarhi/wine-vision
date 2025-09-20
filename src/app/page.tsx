@@ -189,7 +189,7 @@ if (!/^image\/(jpe?g|png|webp)$/i.test(file.type)) return file;
     <main className="min-h-screen bg-gray-50 text-gray-900">
       <div className="max-w-2xl mx-auto p-6 space-y-6">
         <header className="space-y-2">
-          <h1 className="text-3xl font-semibold">Wine Label → ChatGPT</h1>
+          <h1 className="text-3xl font-semibold">Wine Label Analyser - WSET 2 Tasting Spec</h1>
           <p className="text-sm text-gray-600">
             Snap or upload a bottle label. We send the photo to a vision model and return structured info: price estimate,
             drink window & tasting notes. No keys are stored client-side.
