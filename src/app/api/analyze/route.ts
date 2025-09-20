@@ -1,70 +1,135 @@
-// ✅ Next.js (App Router) mini‑app — **fixed** to avoid `process is not defined`
-// -----------------------------------------------------------------------------
-// What changed in this revision
-// - Ensured any use of `process.env` only happens **server-side** inside the
-// API handler (no top‑level access, no client access).
-// - Lazy‑imported the `openai` SDK **inside** the POST handler so the client
-// bundle never touches it.
-// - Added an explicit check+error if `OPENAI_API_KEY` is missing.
-// - Kept the UI as a client component that never references `process`.
-// - Added minimal tests for the API route (no image → 400, missing key → 500).
-// -----------------------------------------------------------------------------
-// SETUP (from scratch)
-// 1) npx create-next-app@latest wine-vision --ts --eslint --app --src-dir false --import-alias "@/*"
-// 2) cd wine-vision && npm i openai
-// 3) Create .env.local with: OPENAI_API_KEY=sk-...
-// 4) Add these files/contents exactly as below.
-// 5) npm run dev → http://localhost:3000
-// (Optional tests)
-// 6) npm i -D vitest @types/node
-// 7) Add to package.json scripts: "test": "vitest"
-// 8) npm test
-// -----------------------------------------------------------------------------
-
-
-// ┌───────────────────────────────────────────────────────────────────────────┐
-// │ FILE: app/api/analyze/route.ts │
-// └───────────────────────────────────────────────────────────────────────────┘
-
-
-export const runtime = "nodejs"; // ensure Node runtime (so `process` & Buffer exist)
-
+// src/app/api/analyze/route.ts
+export const runtime = "nodejs"; // ensure Node (so process.env/Buffer exist)
+// Optional: if you run into caching oddities when testing, uncomment:
+// export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
-import { Buffer } from "node:buffer"; // explicit to avoid any polyfill confusion
+import { Buffer } from "node:buffer";
 
-
-// Minimal JSON schema we want back from the model
+// Strict-ish shape we ask the model to return
 const jsonSchema = {
-recognizedLabel: {
-producer: "",
-wine: "",
-appellation: "",
-region: "",
-country: "",
-vintage: null as number | null,
-},
-grapes: [] as Array<{ variety: string; percent: number | null }>,
-abv: null as number | null,
-tastingNotes: {
-nose: [] as string[],
-palate: [] as string[],
-finish: "",
-wsetLevel2: {
-sweetness: "",
-acidity: "",
-tannin: "",
-body: "",
-alcohol: "",
-finishLength: "",
-},
-},
-drinkWindow: {
-drinkNow: false,
-from: "",
-to: "",
-peakFrom: "",
-peakTo: "",
-decant: "",
-},
+  recognizedLabel: {
+    producer: "",
+    wine: "",
+    appellation: "",
+    region: "",
+    country: "",
+    vintage: null as number | null,
+  },
+  // Quantified grapes (array of { variety, percent })
+  grapes: [] as Array<{ variety: string; percent: number | null }>,
+
+  abv: null as number | null,
+  tastingNotes: {
+    nose: [] as string[],
+    palate: [] as string[],
+    finish: "",
+    wsetLevel2: {
+      sweetness: "",
+      acidity: "",
+      tannin: "",
+      body: "",
+      alcohol: "",
+      finishLength: "",
+    },
+  },
+  drinkWindow: {
+    drinkNow: false,
+    from: "",
+    to: "",
+    peakFrom: "",
+    peakTo: "",
+    decant: "",
+  },
+  priceEstimate: {
+    currency: "GBP",
+    low: null as number | null,
+    high: null as number | null,
+    confidence: "low" as "low" | "medium" | "high",
+    note: "",
+  },
+  caveats: [] as string[],
+  aromasAndFlavours: {
+    primary: [] as string[],
+    secondary: [] as string[],
+    tertiary: [] as string[],
+  },
+};
+
+const SYSTEM_PROMPT = `You are a master sommelier using only information visible on the wine label image and general wine knowledge.
+Return ONLY valid JSON matching the provided schema. If a field is unknown, use null, an empty string, or [] as appropriate.
+Do not invent precise facts you cannot justify from the label (e.g., ABV, grapes, producer) — leave them null if missing on the label.
+For price, give a broad typical retail range for this wine style/region/vintage in the user's likely market (UK/Europe) with low/med/high confidence.
+For drinkWindow, provide a realistic now/peak/from/to and a simple decant recommendation for tonight.
+Populate WSET Level 2 estimates (sweetness, acidity, tannin, body, alcohol, finishLength) based on region/style and vintage.
+Also return an 'aromasAndFlavours' section with primary/secondary/tertiary descriptors.
+Also, return a quantified grape breakdown: set "grapes" to an array of objects like { variety: string, percent: number|null }, where "percent" is the approximate percentage (0–100) for each variety, summing ~100 when known; if unknown, set "percent" to null. If the wine is single-varietal but the label doesn’t state %, include one entry with percent: null.
+`;
+
+export async function POST(req: Request) {
+  try {
+    const form = await req.formData();
+    const file = form.get("image");
+
+    if (!file || !(file instanceof File)) {
+      return NextResponse.json({ error: "No image supplied" }, { status: 400 });
+    }
+
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: "Server misconfiguration: OPENAI_API_KEY is not set" },
+        { status: 500 }
+      );
+    }
+
+    // Lazy import so the client bundle never touches SDK
+    const { default: OpenAI } = await import("openai");
+    const openai = new OpenAI({ apiKey });
+
+    const arrayBuffer = await (file as File).arrayBuffer();
+    const base64 = Buffer.from(arrayBuffer).toString("base64");
+
+    const userPrompt = `Identify the wine from this label image and fill the following JSON schema exactly. Schema: ${JSON.stringify(
+      jsonSchema
+    )}`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini", // vision-capable
+      temperature: 0.2,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: userPrompt },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:${(file as File).type || "image/jpeg"};base64,${base64}`,
+              },
+            },
+          ],
+        },
+      ],
+    });
+
+    const raw = completion.choices?.[0]?.message?.content || "{}";
+    const jsonText = raw.replace(/^```(json)?/i, "").replace(/```$/i, "").trim();
+
+    let data: unknown;
+    try {
+      data = JSON.parse(jsonText);
+    } catch {
+      return NextResponse.json(
+        { error: "Model returned non-JSON", raw },
+        { status: 502 }
+      );
+    }
+
+    return NextResponse.json({ ok: true, data });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Unexpected error";
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
 }
