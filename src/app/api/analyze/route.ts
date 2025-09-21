@@ -57,14 +57,13 @@ const jsonSchema = {
 
 const SYSTEM_PROMPT_VISION = `You are a master sommelier using only the label image and general wine knowledge.
 Return ONLY valid JSON matching the provided schema. If unknown, use null/""/[].
-Do not invent precise facts you cannot justify from the label (ABV, grapes, producer).
-Fill WSET L2 estimates. Include 'aromasAndFlavours' (primary/secondary/tertiary).
+Fill WSET L2 aroma and palette information based on what is typical for the grape and region. Include 'aromasAndFlavours' (primary/secondary/tertiary).
 Provide a quantified grape breakdown: grapes = array of { variety, percent|null } summing ≈100 when known (or null).
 `;
 
 const SYSTEM_PROMPT_GROUNDED = `You are a sommelier grounding outputs in provided web evidence (UK/EU context).
-Use ONLY the evidence below + the parsed label to estimate typical retail price **for this vintage where possible**,
-and a realistic drink window with a one-line decant recommendation. If evidence conflicts, be conservative.
+Use ONLY the evidence below + the parsed label to enhance the original information based on web sources, to estimate the typical retail price **for this vintage where possible**, and 
+to estimate a realistic drink window with a one-line decant recommendation. If evidence conflicts, use the web search results.
 Output must remain VALID JSON in the same schema. Add 0-5 'sources' (title+url) you actually used. If price is weakly supported, set confidence=low and say why in priceEstimate.note.`;
 
 export async function POST(req: Request) {
