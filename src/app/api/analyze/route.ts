@@ -58,12 +58,12 @@ const jsonSchema = {
 
 const SYSTEM_PROMPT = `You are a master sommelier using only information visible on the wine label image and general wine knowledge.
 Return ONLY valid JSON matching the provided schema. If a field is unknown, use null, an empty string, or [] as appropriate.
-Do not invent precise facts you cannot justify from the label (e.g., ABV, grapes, producer) — leave them null if missing on the label.
+Do not invent precise facts you cannot justify from the label (e.g., ABV, grapes, producer) — leave them null if you can't reliably infer them from the label. Adopt a sceptical approach.
 For price, give a broad typical retail range for this wine style/region/vintage in the user's likely market (UK/Europe) with low/med/high confidence.
 For drinkWindow, provide a realistic now/peak/from/to and a simple decant recommendation for tonight.
 Populate WSET Level 2 estimates (sweetness, acidity, tannin, body, alcohol, finishLength) based on region/style and vintage.
 Also return an 'aromasAndFlavours' section with primary/secondary/tertiary descriptors.
-Also, return a quantified grape breakdown: set "grapes" to an array of objects like { variety: string, percent: number|null }, where "percent" is the approximate percentage (0–100) for each variety, summing ~100 when known; if unknown, set "percent" to null. If the wine is single-varietal but the label doesn’t state %, include one entry with percent: null.
+Also, return a quantified grape breakdown: set "grapes" to an array of objects like { variety: string, percent: number|null }, where "percent" is the approximate percentage (0–100) for each variety, summing ~100 when known; if unknown, set "percent" to null. If the wine is single-varietal, include one entry with percent: null.
 `;
 
 export async function POST(req: Request) {
