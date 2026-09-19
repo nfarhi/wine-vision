@@ -1,70 +1,175 @@
-// src/app/api/analyze/route.ts
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { Buffer } from "node:buffer";
 
-type GrapePart = { variety: string; percent: number | null };
+const MODEL = process.env.OPENAI_WINE_MODEL || "gpt-5.6-luna";
 
-const jsonSchema = {
+type WineAnalysis = {
   recognizedLabel: {
-    producer: "",
-    wine: "",
-    appellation: "",
-    region: "",
-    country: "",
-    vintage: null as number | null,
-  },
-  grapes: [] as GrapePart[],
-  abv: null as number | null,
+    producer: string;
+    wine: string;
+    appellation: string;
+    region: string;
+    country: string;
+    vintage: number | null;
+  };
+  grapes: Array<{ variety: string; percent: number | null }>;
+  abv: number | null;
   tastingNotes: {
-    nose: [] as string[],
-    palate: [] as string[],
-    finish: "",
+    nose: string[];
+    palate: string[];
+    finish: string;
     wsetLevel2: {
-      sweetness: "",
-      acidity: "",
-      tannin: "",
-      body: "",
-      alcohol: "",
-      finishLength: "",
-    },
-  },
+      sweetness: string;
+      acidity: string;
+      tannin: string;
+      body: string;
+      alcohol: string;
+      finishLength: string;
+    };
+  };
   drinkWindow: {
-    drinkNow: false,
-    from: "",
-    to: "",
-    peakFrom: "",
-    peakTo: "",
-    decant: "",
-  },
+    drinkNow: boolean;
+    from: string;
+    to: string;
+    peakFrom: string;
+    peakTo: string;
+    decant: string;
+  };
   priceEstimate: {
-    currency: "GBP",
-    low: null as number | null,
-    high: null as number | null,
-    confidence: "low" as "low" | "medium" | "high",
-    note: "",
-  },
-  caveats: [] as string[],
+    currency: string;
+    low: number | null;
+    high: number | null;
+    confidence: "low" | "medium" | "high";
+    note: string;
+  };
+  caveats: string[];
   aromasAndFlavours: {
-    primary: [] as string[],
-    secondary: [] as string[],
-    tertiary: [] as string[],
-  },
-  // Optional: evidence we used
-  sources: [] as Array<{ title: string; url: string }>,
+    primary: string[];
+    secondary: string[];
+    tertiary: string[];
+  };
+  sources: Array<{ title: string; url: string }>;
 };
 
-const SYSTEM_PROMPT_VISION = `You are a master sommelier using only the label image and general wine knowledge.
-Return ONLY valid JSON matching the provided schema. If unknown, use null/""/[].
-Fill WSET L2 aroma and palette information based on what is typical for the grape and region. Include 'aromasAndFlavours' (primary/secondary/tertiary).
-Provide a quantified grape breakdown: grapes = array of { variety, percent|null } summing ≈100 when known (or null).
-`;
+const wineSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "recognizedLabel",
+    "grapes",
+    "abv",
+    "tastingNotes",
+    "drinkWindow",
+    "priceEstimate",
+    "caveats",
+    "aromasAndFlavours",
+    "sources",
+  ],
+  properties: {
+    recognizedLabel: {
+      type: "object",
+      additionalProperties: false,
+      required: ["producer", "wine", "appellation", "region", "country", "vintage"],
+      properties: {
+        producer: { type: "string" },
+        wine: { type: "string" },
+        appellation: { type: "string" },
+        region: { type: "string" },
+        country: { type: "string" },
+        vintage: { type: ["integer", "null"] },
+      },
+    },
+    grapes: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["variety", "percent"],
+        properties: {
+          variety: { type: "string" },
+          percent: { type: ["number", "null"] },
+        },
+      },
+    },
+    abv: { type: ["number", "null"] },
+    tastingNotes: {
+      type: "object",
+      additionalProperties: false,
+      required: ["nose", "palate", "finish", "wsetLevel2"],
+      properties: {
+        nose: { type: "array", items: { type: "string" } },
+        palate: { type: "array", items: { type: "string" } },
+        finish: { type: "string" },
+        wsetLevel2: {
+          type: "object",
+          additionalProperties: false,
+          required: ["sweetness", "acidity", "tannin", "body", "alcohol", "finishLength"],
+          properties: {
+            sweetness: { type: "string" },
+            acidity: { type: "string" },
+            tannin: { type: "string" },
+            body: { type: "string" },
+            alcohol: { type: "string" },
+            finishLength: { type: "string" },
+          },
+        },
+      },
+    },
+    drinkWindow: {
+      type: "object",
+      additionalProperties: false,
+      required: ["drinkNow", "from", "to", "peakFrom", "peakTo", "decant"],
+      properties: {
+        drinkNow: { type: "boolean" },
+        from: { type: "string" },
+        to: { type: "string" },
+        peakFrom: { type: "string" },
+        peakTo: { type: "string" },
+        decant: { type: "string" },
+      },
+    },
+    priceEstimate: {
+      type: "object",
+      additionalProperties: false,
+      required: ["currency", "low", "high", "confidence", "note"],
+      properties: {
+        currency: { type: "string" },
+        low: { type: ["number", "null"] },
+        high: { type: ["number", "null"] },
+        confidence: { type: "string", enum: ["low", "medium", "high"] },
+        note: { type: "string" },
+      },
+    },
+    caveats: { type: "array", items: { type: "string" } },
+    aromasAndFlavours: {
+      type: "object",
+      additionalProperties: false,
+      required: ["primary", "secondary", "tertiary"],
+      properties: {
+        primary: { type: "array", items: { type: "string" } },
+        secondary: { type: "array", items: { type: "string" } },
+        tertiary: { type: "array", items: { type: "string" } },
+      },
+    },
+    sources: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "url"],
+        properties: { title: { type: "string" }, url: { type: "string" } },
+      },
+    },
+  },
+} as const;
 
-const SYSTEM_PROMPT_GROUNDED = `You are a sommelier grounding outputs in provided web evidence (UK/EU context).
-Use ONLY the evidence below + the parsed label to enhance the original information based on web sources, to estimate the typical retail price **for this vintage where possible**, and 
-to estimate a realistic drink window with a one-line decant recommendation. If evidence conflicts, use the web search results.
-Output must remain VALID JSON in the same schema. Add 0-5 'sources' (title+url) you actually used. If price is weakly supported, set confidence=low and say why in priceEstimate.note.`;
+const INSTRUCTIONS = `You are an expert sommelier and WSET educator. Analyse the supplied wine-label image and return the exact requested JSON object.
+
+First transcribe only what is visibly printed on the label. Then identify and verify the producer, exact wine/cuvee, appellation and vintage. Normally use web search for every identifiable bottle. Search specifically for the exact producer + wine/cuvee + vintage. Prefer the producer, appellation or official sources, importer/distributor information, and reputable wine retailers. Use multiple sources when useful, especially for current UK/European retail pricing and vintage-specific drinking guidance.
+
+Clearly distinguish bottle-specific facts from reasonable WSET-style inference. Do not invent unavailable facts: use empty strings, empty arrays, or null. Include WSET Level 2 sweetness, acidity, tannin, body, alcohol and finish length, plus aromas and flavours, drinking window, decant recommendation, price range and confidence, caveats, and the sources actually used. Keep the source list concise. Prices are current approximate UK/European retail prices where supported; explain uncertainty in priceEstimate.note. Do not mention the schema or use markdown.`;
 
 export async function POST(req: Request) {
   try {
@@ -76,154 +181,72 @@ export async function POST(req: Request) {
 
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      return NextResponse.json(
-        { error: "Server misconfiguration: OPENAI_API_KEY is not set" },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Server misconfiguration: OPENAI_API_KEY is not set" }, { status: 500 });
     }
 
     const { default: OpenAI } = await import("openai");
     const openai = new OpenAI({ apiKey });
-
-    // 1) Vision: parse label
     const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
-    const userPrompt1 = `Identify the wine from this label image and fill this JSON schema exactly:\n${JSON.stringify(
-      jsonSchema
-    )}`;
+    const imageUrl = `data:${file.type || "image/jpeg"};base64,${base64}`;
 
-    const vision = await openai.chat.completions.create({
-      model: "gpt-4o-mini",
-      temperature: 0.2,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT_VISION },
-        {
-          role: "user",
-          content: [
-            { type: "text", text: userPrompt1 },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:${(file as File).type || "image/jpeg"};base64,${base64}`,
-              },
-            },
-          ],
+    const response = await openai.responses.create({
+      model: MODEL,
+      reasoning: { effort: "low" },
+      tools: [{ type: "web_search_preview" }],
+      instructions: INSTRUCTIONS,
+      input: [{
+        role: "user",
+        content: [
+          { type: "input_text", text: "Identify and analyse this wine label. Search the web to verify the exact bottle and enrich the analysis." },
+          { type: "input_image", image_url: imageUrl, detail: "high" },
+        ],
+      }],
+      text: {
+        format: {
+          type: "json_schema",
+          name: "wine_analysis",
+          strict: true,
+          schema: wineSchema,
         },
-      ],
+      },
     });
 
-    const raw1 = vision.choices?.[0]?.message?.content || "{}";
-    const json1 = stripCodeFences(raw1);
-    let parsed1: any;
+    if (!response.output_text) {
+      return NextResponse.json({ error: "OpenAI returned no structured wine analysis" }, { status: 502 });
+    }
+
+    let data: WineAnalysis;
     try {
-      parsed1 = JSON.parse(json1);
+      data = JSON.parse(response.output_text) as WineAnalysis;
     } catch {
-      return NextResponse.json(
-        { error: "Model returned non-JSON in stage 1", raw: raw1 },
-        { status: 502 }
-      );
+      return NextResponse.json({ error: "OpenAI returned invalid structured wine analysis" }, { status: 502 });
     }
 
-    // 2) Optional: server-side web search for prices & details
-    let evidence: Array<{ title: string; url: string; snippet: string }> = [];
-    const tavilyKey = process.env.TAVILY_API_KEY; // optional
-    const q = buildQueryFromLabel(parsed1);
-    if (tavilyKey && q) {
-      try {
-        const searchRes = await fetch("https://api.tavily.com/search", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            api_key: tavilyKey,
-            query: q,
-            include_answer: false,
-            max_results: 6,
-            // Focus on likely UK/EU retailers to get relevant prices
-            search_depth: "advanced",
-          }),
-          // keep Vercel/Edge happy
-          cache: "no-store",
-        });
+    const sources = extractSearchSources(response);
+    if (sources.length > 0) data.sources = sources.slice(0, 5);
 
-        if (searchRes.ok) {
-          const data = (await searchRes.json()) as {
-            results?: Array<{ title: string; url: string; content: string }>;
-          };
-          evidence =
-            data.results?.map((r) => ({
-              title: r.title?.slice(0, 140) || "Result",
-              url: r.url,
-              snippet: r.content?.slice(0, 500) || "",
-            })) ?? [];
-        }
-      } catch {
-        // If search fails, just proceed without it
-      }
-    }
-
-    // 3) Grounded synthesis: merge label + evidence
-    let finalData = parsed1;
-    if (evidence.length > 0) {
-      const sys = SYSTEM_PROMPT_GROUNDED;
-      const userPrompt2 =
-        `Label JSON:\n${JSON.stringify(parsed1)}\n\nWeb evidence (array of {title,url,snippet}):\n` +
-        `${JSON.stringify(evidence)}\n\nReturn a SINGLE JSON object in the same schema, updating priceEstimate/drinkWindow and adding up to 5 'sources'.`;
-
-      const grounded = await openai.chat.completions.create({
-        model: "gpt-4.1",
-        temperature: 0.2,
-        messages: [
-          { role: "system", content: sys },
-          { role: "user", content: userPrompt2 },
-        ],
-      });
-
-      const raw2 = grounded.choices?.[0]?.message?.content || "{}";
-      const json2 = stripCodeFences(raw2);
-      try {
-        finalData = JSON.parse(json2);
-      } catch {
-        // if grounded step fails JSON, fall back to vision result but keep going
-        finalData = parsed1;
-        // Append a note so UI shows why prices may be weak
-        finalData.priceEstimate = finalData.priceEstimate || {};
-        finalData.priceEstimate.note =
-          (finalData.priceEstimate.note || "") +
-          " (Grounding step failed to parse JSON; prices may be less reliable.)";
-      }
-
-      // Add top sources if model didn’t
-      if (!Array.isArray(finalData.sources) || finalData.sources.length === 0) {
-        finalData.sources = evidence.slice(0, 5).map((e) => ({
-          title: e.title,
-          url: e.url,
-        }));
-      }
-    }
-
-    return NextResponse.json({ ok: true, data: finalData });
+    return NextResponse.json({ ok: true, data });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : "Unexpected error";
-    return NextResponse.json({ error: message }, { status: 500 });
+    const message = err instanceof Error ? err.message : "Unexpected error from OpenAI";
+    return NextResponse.json({ error: `Wine analysis failed: ${message}` }, { status: 502 });
   }
 }
 
-function stripCodeFences(s: string) {
-  return s.replace(/^```(json)?/i, "").replace(/```$/i, "").trim();
+function extractSearchSources(response: { output?: unknown[] }): Array<{ title: string; url: string }> {
+  const sources: Array<{ title: string; url: string }> = [];
+  for (const item of response.output ?? []) {
+    const candidate = item as {
+      type?: string;
+      action?: { sources?: Array<{ title?: string; url?: string }> };
+    };
+    if (candidate.type !== "web_search_call") continue;
+    for (const source of candidate.action?.sources ?? []) {
+      if (source.url) sources.push({ title: source.title || source.url, url: source.url });
+    }
+  }
+  return sources.filter((source, index, all) => all.findIndex((other) => other.url === source.url) === index);
 }
 
-function buildQueryFromLabel(label: any): string {
-  const parts = [
-    label?.recognizedLabel?.producer,
-    label?.recognizedLabel?.wine,
-    label?.recognizedLabel?.appellation,
-    label?.recognizedLabel?.region,
-    label?.recognizedLabel?.country,
-    label?.recognizedLabel?.vintage,
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  if (!parts) return "";
-  // Bias to UK/EU retailers + producers
-  return `${parts} price site:wine-searcher.com OR site:thewinesociety.com OR site:berrybros.com OR site:vinatis.co.uk OR site:vinissimus.co.uk OR site:waitrose.com OR site:majestic.co.uk OR site:winemaker's site`;
-}
+// The model is intentionally configured through one constant so Luna can be benchmarked
+// against another Responses API model without changing the request architecture.
+export type { WineAnalysis };
