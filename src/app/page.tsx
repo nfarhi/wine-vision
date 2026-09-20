@@ -1,403 +1,100 @@
-// src/app/page.tsx
-/* eslint-disable @next/next/no-img-element */
 "use client";
 
-import React, { useRef, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 
-/** Shape we expect back from the API. All fields optional/loose on purpose. */
-type WsetL2 = Partial<{
-  sweetness: string;
-  acidity: string;
-  tannin: string;
-  body: string;
-  alcohol: string;
-  finishLength: string;
-}>;
+type PriceEstimate = { currency?: string; low?: number; high?: number; confidence?: string; note?: string };
+type RecognizedLabel = { producer?: string; wine?: string; appellation?: string; region?: string; country?: string; vintage?: string | number };
+type ApiResult = { recognizedLabel?: RecognizedLabel; priceEstimate?: PriceEstimate; abv?: number | null; tastingNotes?: { nose?: string[]; palate?: string[]; finish?: string; wsetLevel2?: Record<string, string> }; aromasAndFlavours?: Record<string, string[]>; grapes?: Array<string | { variety: string; percent: number | null }>; drinkWindow?: Record<string, string>; caveats?: string[] };
+type WineRecord = { id: string; name: string; producer: string; date: string; price: string; image: string; result: ApiResult };
 
-type TastingNotes = Partial<{
-  nose: string[];
-  palate: string[];
-  finish: string;
-  wsetLevel2: WsetL2;
-}>;
-
-type RecognizedLabel = Partial<{
-  producer: string;
-  wine: string;
-  appellation: string;
-  region: string;
-  country: string;
-  vintage: string | number;
-}>;
-
-type DrinkWindow = Partial<{
-  drinkNow: boolean;
-  from: string;
-  to: string;
-  peakFrom: string;
-  peakTo: string;
-  decant: string;
-}>;
-
-type PriceEstimate = Partial<{
-  currency: string;
-  low: number;
-  high: number;
-  confidence: string;
-  note: string;
-}>;
-
-type AromasAndFlavours = Partial<{
-  primary: string[];
-  secondary: string[];
-  tertiary: string[];
-}>;
-
-type GrapePart = { variety: string; percent: number | null };
-
-type ApiResult = Partial<{
-  recognizedLabel: RecognizedLabel;
-  tastingNotes: TastingNotes;
-  drinkWindow: DrinkWindow;
-  priceEstimate: PriceEstimate;
-  aromasAndFlavours: AromasAndFlavours;
-  grapes: GrapePart[] | string[]; // backward compatible with earlier string[] shape
-  caveats: string[];
-}>;
+const initialHistory: WineRecord[] = [];
 
 export default function Page() {
-  const fileRef = useRef<HTMLInputElement | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
   const [preview, setPreview] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<ApiResult | null>(null);
+  const [history, setHistory] = useState<WineRecord[]>(initialHistory);
+  const [sort, setSort] = useState<keyof WineRecord>("date");
+  const [ascending, setAscending] = useState(false);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    const url = URL.createObjectURL(f);
-    setPreview(url);
+  function onPickFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setPreview(URL.createObjectURL(file));
     setResult(null);
     setError(null);
   }
 
-async function onSubmit(e: React.FormEvent) {
-  e.preventDefault();
-  setLoading(true);
-  setError(null);
-  setResult(null);
-
-  const file = fileRef.current?.files?.[0];
-  if (!file) {
-    setError("⚠️ Please upload a wine label image before analyzing.");
-    setLoading(false);
-    return;
+  async function onSubmit(event: FormEvent) {
+    event.preventDefault();
+    const file = fileRef.current?.files?.[0];
+    if (!file) { setError("Choose a label photo before analyzing."); return; }
+    setLoading(true); setError(null); setResult(null);
+    try {
+      const processed = await resizeIfNeeded(file, 1600);
+      const form = new FormData(); form.append("image", processed, processed.name || "label.jpg");
+      const response = await fetch("/api/analyze", { method: "POST", body: form });
+      const text = await response.text();
+      const payload = text ? JSON.parse(text) : null;
+      if (!response.ok) throw new Error(payload?.error || text || `HTTP ${response.status}`);
+      const data = payload?.data as ApiResult;
+      setResult(data);
+      const label = data.recognizedLabel ?? {};
+      const price = data.priceEstimate ?? {};
+      const currency = price.currency || "£";
+      const amount = price.low != null && price.high != null ? `${currency}${price.low}–${price.high}` : "Not available";
+      setHistory((items) => [{ id: crypto.randomUUID(), name: label.wine || "Unidentified wine", producer: label.producer || "Unknown producer", date: new Date().toISOString(), price: amount, image: preview || "", result: data }, ...items]);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Something went wrong while analyzing the photo.");
+    } finally { setLoading(false); }
   }
 
-  try {
-    // Optional: downscale large images to avoid 413 / reduce upload time
-    const processed = await resizeIfNeeded(file, 1600); // max width 1600px
-
-    const fd = new FormData();
-    fd.append("image", processed, processed.name || file.name || "label.jpg");
-
-    const res = await fetch("/api/analyze", { method: "POST", body: fd });
-
-    // Read as text first so we can safely handle non-JSON (HTML error pages, empty body, etc.)
-    const contentType = res.headers.get("content-type") || "";
-    const text = await res.text();
-
-    let payload: unknown = null;
-    if (contentType.includes("application/json") && text) {
-      try {
-        payload = JSON.parse(text);
-      } catch {
-        // fall through; we'll handle as non-JSON below
-      }
-    }
-
-    if (!res.ok) {
-      // Try to extract server error message if present
-      const msg =
-        (typeof (payload as any)?.error === "string" && (payload as any).error) ||
-        (text && text.slice(0, 300)) ||
-        `HTTP ${res.status}`;
-      throw new Error(msg);
-    }
-
-    const data = (payload as any)?.data;
-    if (!data) {
-      throw new Error("Empty response from server.");
-    }
-
-    setResult(data);
-  } catch (err: unknown) {
-    let msg = err instanceof Error ? err.message : "Something went wrong.";
-
-    if (/payload too large|entity too large|413/i.test(msg)) {
-      msg = "⚠️ The image is too large for the server. Try a smaller photo or let me compress it.";
-    } else if (/quota/i.test(msg) || /429/.test(msg)) {
-      msg =
-        "⚠️ You’ve used up your OpenAI credits or hit a rate limit. Please check your OpenAI billing and try again later.";
-    } else if (/OPENAI_API_KEY/i.test(msg) || /401|unauthorized/i.test(msg)) {
-      msg =
-        "⚠️ API key problem. Check your OPENAI_API_KEY in Vercel → Project → Settings → Environment Variables.";
-    } else if (/No image supplied/i.test(msg)) {
-      msg = "⚠️ Please upload a wine label image before analyzing.";
-    }
-
-    setError(msg);
-  } finally {
-    setLoading(false);
+  function changeSort(column: keyof WineRecord) {
+    if (sort === column) setAscending((value) => !value); else { setSort(column); setAscending(true); }
   }
-}
+  const sortedHistory = [...history].sort((a, b) => { const left = String(a[sort]); const right = String(b[sort]); return (left > right ? 1 : left < right ? -1 : 0) * (ascending ? 1 : -1); });
 
-async function resizeIfNeeded(file: File, maxWidth: number): Promise<File> {
- // Quick guard: only process large images and common image types
-if (!/^image\/(jpe?g|png|webp)$/i.test(file.type)) return file;
-
-  // Create an image bitmap
-  const img = await createImageBitmap(file);
-  if (img.width <= maxWidth) return file; // no need to resize
-
-  const scale = maxWidth / img.width;
-  const targetW = Math.round(img.width * scale);
-  const targetH = Math.round(img.height * scale);
-
-  const canvas = document.createElement("canvas");
-  canvas.width = targetW;
-  canvas.height = targetH;
-
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return file;
-  ctx.drawImage(img, 0, 0, targetW, targetH);
-
-  // Export as JPEG for size; tweak quality if you like
-  const blob: Blob = await new Promise((resolve) =>
-    canvas.toBlob((b) => resolve(b as Blob), "image/jpeg", 0.9)
-  );
-
-  // Construct a File so FormData keeps a filename
-  return new File([blob], (file.name || "label").replace(/\\.[^.]+$/, "") + ".jpg", {
-    type: "image/jpeg",
-    lastModified: Date.now(),
-  });
-}
-
-
-  return (
-    <main className="min-h-screen bg-gray-50 text-gray-900">
-      <div className="max-w-2xl mx-auto p-6 space-y-6">
-        <header className="space-y-2">
-          <h1 className="text-3xl font-semibold">Wine Label Analyser - WSET 2 Tasting Spec</h1>
-          <p className="text-sm text-gray-600">
-            Snap or upload a bottle label. We send the photo to a vision model and return structured info: price estimate,
-            drink window & tasting notes. No keys are stored client-side.
-          </p>
-        </header>
-
-        <form onSubmit={onSubmit} className="space-y-4">
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*"
-            capture="environment"
-            onChange={onPickFile}
-            className="block w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:bg-gray-900 file:text-white hover:file:bg-black"
-          />
-
-          {preview && (
-            <img src={preview} alt="preview" className="w-full rounded-xl shadow border" />
-          )}
-
-          <button
-            disabled={loading}
-            className="px-4 py-2 rounded-xl bg-black text-white disabled:opacity-50"
-          >
-            {loading ? "Analyzing…" : "Analyze Label"}
-          </button>
-        </form>
-
-        {error && (
-          <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-red-800">
-            {error}
-          </div>
-        )}
-
-        {/* Guard so a render error in the card won't blank the whole page */}
-        {result ? <SafeResult result={result} /> : null}
-
-        <footer className="text-xs text-gray-500">
-          Tip: Prices are indicative; verify locally (Wine-Searcher, retailer).
-        </footer>
-      </div>
-    </main>
-  );
-}
-
-function SafeResult({ result }: { result: ApiResult }) {
-  try {
-    return <ResultCard data={result} />;
-  } catch (e) {
-    return (
-      <div className="p-3 bg-red-50 border border-red-200 rounded-2xl text-red-800">
-        Component crashed while rendering: {e instanceof Error ? e.message : "unknown error"}
-      </div>
-    );
-  }
-}
-
-function ResultCard({ data }: { data: ApiResult }) {
-  const rl = (data.recognizedLabel ?? {}) as RecognizedLabel;
-  const tn = (data.tastingNotes ?? {}) as TastingNotes;
-  const w2 = (tn.wsetLevel2 ?? {}) as WsetL2;
-  const dw = (data.drinkWindow ?? {}) as DrinkWindow;
-  const pe = (data.priceEstimate ?? {}) as PriceEstimate;
-  const af = (data.aromasAndFlavours ?? {}) as AromasAndFlavours;
-
-  // Normalise grapes (support string[] and {variety, percent}[])
-  const grapesRaw = data.grapes ?? [];
-  const grapes: GrapePart[] = Array.isArray(grapesRaw)
-    ? grapesRaw.map((g) => {
-        if (typeof g === "string") return { variety: g, percent: null };
-        const obj = g as Partial<GrapePart>;
-        return {
-          variety: String(obj?.variety ?? ""),
-          percent: typeof obj?.percent === "number" ? obj.percent : null,
-        };
-      })
-    : [];
-
-  return (
-    <section className="space-y-4">
-      {/* Wine Information */}
-      <div className="grid gap-3 p-4 rounded-2xl bg-white shadow">
-        <h2 className="text-xl font-semibold">Wine Information</h2>
-        <div className="grid grid-cols-2 gap-2 text-sm">
-          <Field k="Producer" v={safeStr(rl.producer)} />
-          <Field k="Wine" v={safeStr(rl.wine)} />
-          <Field k="Appellation" v={safeStr(rl.appellation)} />
-          <Field k="Region" v={safeStr(rl.region)} />
-          <Field k="Country" v={safeStr(rl.country)} />
-          <Field k="Vintage" v={rl.vintage != null ? String(rl.vintage) : "—"} />
+  return <main className="min-h-screen bg-[#f7f5f0] text-[#27251f]">
+    <div className="mx-auto max-w-6xl px-5 py-8 sm:px-8 lg:py-12">
+      <header className="mb-10 flex items-end justify-between gap-6">
+        <div><p className="mb-3 text-xs font-semibold uppercase tracking-[0.28em] text-[#9b5b3d]">Cellar notes</p><h1 className="font-serif text-4xl tracking-tight sm:text-6xl">Your wine cabinet</h1><p className="mt-4 max-w-xl text-sm leading-6 text-[#716d64]">Photograph a label to capture its story, tasting profile and indicative retail value.</p></div>
+        <div className="hidden rounded-full border border-[#ddd7cc] bg-white px-4 py-2 text-xs text-[#716d64] sm:block">{history.length} {history.length === 1 ? "bottle" : "bottles"} logged</div>
+      </header>
+      <section className="grid gap-8 lg:grid-cols-[minmax(280px,360px)_1fr]">
+        <div className="rounded-3xl border border-[#ded8cd] bg-[#292721] p-5 text-[#f8f4ed] shadow-[0_20px_50px_rgba(55,45,32,.12)]">
+          <div className="mb-8 flex items-center justify-between"><span className="text-sm font-medium">Add a bottle</span><span className="rounded-full bg-[#9b5b3d] px-3 py-1 text-[10px] uppercase tracking-wider">WSET 2</span></div>
+          <form onSubmit={onSubmit} className="flex flex-col gap-4">
+            <label className="group relative flex min-h-64 cursor-pointer flex-col items-center justify-center overflow-hidden rounded-2xl border border-dashed border-[#746b5d] bg-[#35312a] text-center transition hover:border-[#d7a383]">
+              {preview ? <img src={preview} alt="Selected wine label" className="absolute inset-0 size-full object-cover opacity-75" /> : <><span className="mb-4 text-4xl text-[#d7a383]">+</span><span className="text-sm">Choose a label photo</span><span className="mt-2 text-xs text-[#aaa296]">Camera or image upload</span></>}
+              <input ref={fileRef} type="file" accept="image/*" capture="environment" onChange={onPickFile} className="sr-only" />
+            </label>
+            <button disabled={loading} className="rounded-full bg-[#d7a383] px-5 py-3 text-sm font-semibold text-[#292721] transition hover:bg-[#e5b99d] disabled:opacity-50">{loading ? "Reading the label…" : "Analyze label"}</button>
+          </form>
+          {error && <p className="mt-4 rounded-xl bg-[#57352d] p-3 text-xs leading-5 text-[#f6d7ca]">{error}</p>}
         </div>
-
-        {/* Grapes with % */}
-        <div className="text-sm">
-          <div className="font-medium mb-2">Grapes</div>
-          <div className="flex flex-wrap gap-2">
-            {grapes.length > 0 ? (
-              grapes.map((g, i) => (
-                <span key={i} className="px-2 py-1 bg-gray-100 rounded-full border text-gray-800">
-                  {g.variety}
-                  {g.percent != null ? ` ${g.percent}%` : ""}
-                </span>
-              ))
-            ) : (
-              <span className="text-gray-600">—</span>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Tasting Notes */}
-      <div className="grid gap-3 p-4 rounded-2xl bg-white shadow">
-        <h2 className="text-xl font-semibold">Tasting Notes</h2>
-        <PillList label="Nose" items={(tn.nose ?? []).filter(Boolean)} />
-        <PillList label="Palate" items={(tn.palate ?? []).filter(Boolean)} />
-        {tn.finish ? (
-          <div className="text-sm">
-            <span className="font-medium">Finish:</span> {tn.finish}
-          </div>
-        ) : null}
-        <div className="text-sm grid grid-cols-2 gap-2">
-          <Field k="Sweetness" v={safeStr(w2.sweetness)} />
-          <Field k="Acidity" v={safeStr(w2.acidity)} />
-          <Field k="Tannin" v={safeStr(w2.tannin)} />
-          <Field k="Body" v={safeStr(w2.body)} />
-          <Field k="Alcohol" v={safeStr(w2.alcohol)} />
-          <Field k="Finish Length" v={safeStr(w2.finishLength)} />
-        </div>
-      </div>
-
-      {/* Aromas and Flavours */}
-      <div className="grid gap-3 p-4 rounded-2xl bg-white shadow">
-        <h2 className="text-xl font-semibold">Aromas and Flavours</h2>
-        <PillList label="Primary" items={(af.primary ?? []).filter(Boolean)} />
-        <PillList label="Secondary" items={(af.secondary ?? []).filter(Boolean)} />
-        <PillList label="Tertiary" items={(af.tertiary ?? []).filter(Boolean)} />
-      </div>
-
-      {/* Drink Window (no Drink Now cell, per request) */}
-      <div className="grid gap-3 p-4 rounded-2xl bg-white shadow">
-        <h2 className="text-xl font-semibold">Drink Window</h2>
-        <div className="text-sm grid grid-cols-2 gap-2">
-          <Field k="From" v={safeStr(dw.from)} />
-          <Field k="To" v={safeStr(dw.to)} />
-          <Field k="Peak From" v={safeStr(dw.peakFrom)} />
-          <Field k="Peak To" v={safeStr(dw.peakTo)} />
-          <Field k="Decant" v={safeStr(dw.decant)} />
-        </div>
-      </div>
-
-      {/* Price */}
-      <div className="grid gap-3 p-4 rounded-2xl bg-white shadow">
-        <h2 className="text-xl font-semibold">Price (estimate)</h2>
-        <div className="text-sm grid grid-cols-2 gap-2">
-          <Field k="Currency" v={safeStr(pe.currency)} />
-          <Field
-            k="Range"
-            v={
-              pe.low != null && pe.high != null
-                ? `${String(pe.low)} – ${String(pe.high)}`
-                : "—"
-            }
-          />
-          <Field k="Confidence" v={safeStr(pe.confidence)} />
-        </div>
-        {pe.note ? <div className="text-xs text-gray-600">{pe.note}</div> : null}
-      </div>
-
-      {/* Caveats */}
-      {Array.isArray(data.caveats) && data.caveats.length > 0 ? (
-        <div className="p-3 bg-yellow-50 border border-yellow-200 rounded-2xl text-sm">
-          <div className="font-medium mb-1">Caveats</div>
-          <ul className="list-disc pl-5 space-y-1">
-            {data.caveats.map((c, i) => (
-              <li key={i}>{c}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-    </section>
-  );
-}
-
-function Field({ k, v }: { k: string; v: string }) {
-  return (
-    <div>
-      <span className="font-medium">{k}:</span> {v || "—"}
+        <div className="min-w-0">{result ? <ResultCard data={result} /> : <div className="flex h-full min-h-64 items-center justify-center rounded-3xl border border-dashed border-[#d8d1c5] p-8 text-center text-sm text-[#898277]">Your latest tasting profile will appear here after an analysis.</div>}</div>
+      </section>
+      <section className="mt-16">
+        <div className="mb-5 flex items-end justify-between"><div><p className="text-xs font-semibold uppercase tracking-[0.24em] text-[#9b5b3d]">The collection</p><h2 className="mt-2 font-serif text-3xl">Photographed wines</h2></div><span className="text-xs text-[#898277]">Select a column to sort</span></div>
+        <div className="overflow-hidden rounded-3xl border border-[#ded8cd] bg-white"><div className="overflow-x-auto"><table className="w-full min-w-[620px] text-left text-sm"><thead className="border-b border-[#eee9e1] bg-[#fcfbf8] text-xs uppercase tracking-wider text-[#898277]"><tr>{[["image","Photo"],["name","Wine"],["date","Date photographed"],["price","Price"]].map(([key, label]) => <th key={key} className="px-5 py-4 font-medium"><button onClick={() => changeSort(key as keyof WineRecord)} className="inline-flex items-center gap-2 hover:text-[#9b5b3d]">{label}<span>{sort === key ? (ascending ? "↑" : "↓") : "↕"}</span></button></th>)}</tr></thead><tbody>{sortedHistory.length ? sortedHistory.map((wine) => <tr key={wine.id} className="border-b border-[#f0ece5] last:border-0"><td className="px-5 py-3"><div className="size-12 overflow-hidden rounded-xl bg-[#eee9e1]">{wine.image && <img src={wine.image} alt="" className="size-full object-cover" />}</div></td><td className="px-5 py-3"><div className="font-medium">{wine.name}</div><div className="mt-1 text-xs text-[#898277]">{wine.producer}</div></td><td className="px-5 py-3 text-[#716d64]">{new Date(wine.date).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" })}</td><td className="px-5 py-3 font-medium">{wine.price}</td></tr>) : <tr><td colSpan={4} className="px-6 py-14 text-center text-sm text-[#898277]">No wines yet. Your analyzed labels will be saved here.</td></tr>}</tbody></table></div></div>
+      </section>
+      <footer className="mt-8 text-xs text-[#9b958b]">Indicative prices only. Verify with a retailer before purchasing.</footer>
     </div>
-  );
+  </main>;
 }
 
-function PillList({ label, items }: { label: string; items: string[] }) {
-  const list = Array.isArray(items) ? items : [];
-  if (list.length === 0) return null;
-  return (
-    <div className="text-sm">
-      <div className="font-medium mb-2">{label}</div>
-      <div className="flex flex-wrap gap-2">
-        {list.map((it, i) => (
-          <span key={i} className="px-2 py-1 bg-gray-100 rounded-full border text-gray-800">
-            {it}
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
+function ResultCard({ data }: { data: ApiResult }) { const label = data.recognizedLabel ?? {}; const price = data.priceEstimate ?? {}; const notes = data.tastingNotes ?? {}; const wset = notes.wsetLevel2 ?? {}; const compactNote = (value?: string | string[]) => Array.isArray(value) ? value.slice(0, 2).join(" · ") : value; return <article className="rounded-3xl border border-[#ded8cd] bg-white p-6 shadow-sm"><div className="mb-6 flex items-start justify-between gap-4"><div><p className="text-xs uppercase tracking-wider text-[#9b5b3d]">Latest reading</p><h2 className="mt-2 font-serif text-3xl">{label.wine || "Unidentified wine"}</h2><p className="mt-1 text-sm text-[#716d64]">{label.producer || "Producer unknown"}{label.vintage ? ` · ${label.vintage}` : ""}</p></div><span className="rounded-full bg-[#f3e5dc] px-3 py-1 text-xs text-[#9b5b3d]">Analyzed</span></div><div className="grid grid-cols-2 gap-3 sm:grid-cols-3">{[["Region", label.region || label.country || "—"],["Alcohol", data.abv != null ? `${data.abv}% ABV` : "—"],["Price", price.low != null && price.high != null ? `${price.currency || "£"}${price.low}–${price.high}` : "—"],["Drink window", data.drinkWindow?.from || "—"]].map(([key, value]) => <div key={key} className="rounded-2xl bg-[#f7f5f0] p-3"><p className="text-[10px] uppercase tracking-wider text-[#9b958b]">{key}</p><p className="mt-2 text-sm font-medium">{value}</p></div>)}</div>{price.note && <p className="mt-5 text-xs leading-5 text-[#898277]">{price.note}</p>}<div className="mt-6 border-t border-[#eee9e1] pt-5"><p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#9b5b3d]">WSET 2 tasting notes</p><div className="mt-4 grid gap-4 text-sm leading-6 text-[#716d64] sm:grid-cols-3">{[["Colour", wset.colour], ["Nose intensity", wset.noseIntensity], ["Nose", compactNote(notes.nose)], ["Palate", compactNote(notes.palate)], ["Alcohol", data.abv != null ? `${data.abv}% ABV` : wset.alcohol || "—"], ["Finish", notes.finish]].map(([key, value]) => <div key={key} className={key === "Finish" ? "col-span-full mt-2 border-t border-[#eee9e1] pt-3" : ""}><p className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-[#9b958b]">{key}</p><p>{value || "—"}</p></div>)}</div>{Object.keys(wset).length > 0 && <p className="mt-4 text-xs leading-5 text-[#898277]">{Object.entries(wset).slice(0, 4).map(([key, value]) => `${key}: ${value}`).join(" · ")}</p>}</div></article>; }
 
-function safeStr(v: unknown): string {
-  return typeof v === "string" ? v : v != null ? String(v) : "—";
-}
+async function resizeIfNeeded(file: File, maxWidth: number) { if (!/^image\/(jpe?g|png|webp)$/i.test(file.type)) return file; const img = await createImageBitmap(file); if (img.width <= maxWidth) return file; const canvas = document.createElement("canvas"); const scale = maxWidth / img.width; canvas.width = maxWidth; canvas.height = Math.round(img.height * scale); canvas.getContext("2d")?.drawImage(img, 0, 0, canvas.width, canvas.height); const blob = await new Promise<Blob>((resolve) => canvas.toBlob((value) => resolve(value as Blob), "image/jpeg", .88)); return new File([blob], "label.jpg", { type: "image/jpeg" }); }
+
+export function safeStr(value: unknown) { return value == null ? "—" : String(value); }
+export function Field({ k, v }: { k: string; v: string }) { return <div><span className="font-medium">{k}:</span> {v || "—"}</div>; }
+export function PillList({ label, items }: { label: string; items: string[] }) { return items?.length ? <div><p className="mb-2 text-xs font-medium uppercase tracking-wider text-[#898277]">{label}</p><div className="flex flex-wrap gap-2">{items.map((item) => <span key={item} className="rounded-full bg-[#f3e5dc] px-3 py-1 text-xs text-[#7f4934]">{item}</span>)}</div></div> : null; }
+
+/* The history is intentionally scoped to the current session until a user account/storage schema is enabled. */
+const initialHistoryNote = initialHistory;
+void initialHistoryNote;
+
+// Keep the existing detailed analysis available through the compact latest-reading card above.
