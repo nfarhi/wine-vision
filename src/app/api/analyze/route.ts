@@ -59,7 +59,7 @@ const jsonSchema = {
 
 const SYSTEM_PROMPT_VISION = `You are a master sommelier using only the label image and general wine knowledge.
 Return ONLY valid JSON matching the provided schema. If unknown, use null/""/[].
-Fill WSET Level 2 systematic tasting notes based on the label, grape and region. For colour use pale, medium or deep. For noseIntensity use light, medium or pronounced. For alcohol use low, medium or high; also return the numeric alcohol percentage in abv when known. Keep tasting notes succinct. Include 'aromasAndFlavours' (primary/secondary/tertiary).
+Fill WSET Level 2 systematic tasting notes based on the label, grape and region. For colour, use the WSET Level 2 colour terms appropriate to the wine: white wines use lemon, gold, amber or brown; red wines use purple, ruby, garnet, tawny or brown; rosé wines use pink, salmon or orange. Do not return colour intensity. For noseIntensity use light, medium or pronounced. For alcohol use low, medium or high; also return the numeric alcohol percentage in abv when known. Keep tasting notes succinct. Include 'aromasAndFlavours' (primary/secondary/tertiary).
 Provide a quantified grape breakdown: grapes = array of { variety, percent|null } summing ≈100 when known (or null).
 `;
 
