@@ -113,7 +113,7 @@ export async function POST(req: Request) {
 
     const raw1 = vision.choices?.[0]?.message?.content || "{}";
     const json1 = stripCodeFences(raw1);
-    let parsed1: any;
+    let parsed1: Record<string, unknown>;
     try {
       parsed1 = JSON.parse(json1);
     } catch {
@@ -185,10 +185,10 @@ export async function POST(req: Request) {
         // if grounded step fails JSON, fall back to vision result but keep going
         finalData = parsed1;
         // Append a note so UI shows why prices may be weak
-        finalData.priceEstimate = finalData.priceEstimate || {};
-        finalData.priceEstimate.note =
-          (finalData.priceEstimate.note || "") +
-          " (Grounding step failed to parse JSON; prices may be less reliable.)";
+        const priceEstimate = (finalData.priceEstimate ?? {}) as Record<string, unknown>;
+        priceEstimate.note =
+          `${String(priceEstimate.note || "")} (Grounding step failed to parse JSON; prices may be less reliable.)`;
+        finalData.priceEstimate = priceEstimate;
       }
 
       // Add top sources if model didn’t
@@ -211,14 +211,15 @@ function stripCodeFences(s: string) {
   return s.replace(/^```(json)?/i, "").replace(/```$/i, "").trim();
 }
 
-function buildQueryFromLabel(label: any): string {
+function buildQueryFromLabel(label: Record<string, unknown>): string {
+  const recognized = (label.recognizedLabel ?? {}) as Record<string, unknown>;
   const parts = [
-    label?.recognizedLabel?.producer,
-    label?.recognizedLabel?.wine,
-    label?.recognizedLabel?.appellation,
-    label?.recognizedLabel?.region,
-    label?.recognizedLabel?.country,
-    label?.recognizedLabel?.vintage,
+    recognized.producer,
+    recognized.wine,
+    recognized.appellation,
+    recognized.region,
+    recognized.country,
+    recognized.vintage,
   ]
     .filter(Boolean)
     .join(" ");
