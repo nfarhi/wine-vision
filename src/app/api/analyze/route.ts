@@ -72,8 +72,9 @@ export async function POST(req: Request) {
   try {
     const form = await req.formData();
     const file = form.get("image");
-    if (!file || !(file instanceof File)) {
-      return NextResponse.json({ error: "No image supplied" }, { status: 400 });
+    const wineName = String(form.get("wineName") || "").trim();
+    if ((!file || !(file instanceof File)) && !wineName) {
+      return NextResponse.json({ error: "No image or wine name supplied" }, { status: 400 });
     }
 
     const apiKey = process.env.OPENAI_API_KEY;
@@ -87,11 +88,11 @@ export async function POST(req: Request) {
     const { default: OpenAI } = await import("openai");
     const openai = new OpenAI({ apiKey });
 
-    // 1) Vision: parse label
-    const base64 = Buffer.from(await file.arrayBuffer()).toString("base64");
-    const userPrompt1 = `Identify the wine from this label image and fill this JSON schema exactly:\n${JSON.stringify(
-      jsonSchema
-    )}`;
+    // 1) Identify the wine from either a label image or a typed name.
+    const base64 = file instanceof File ? Buffer.from(await file.arrayBuffer()).toString("base64") : "";
+    const userPrompt1 = wineName
+      ? `Identify the wine named "${wineName}" and fill this JSON schema exactly. Use general wine knowledge for the WSET notes; leave uncertain fields blank.\n${JSON.stringify(jsonSchema)}`
+      : `Identify the wine from this label image and fill this JSON schema exactly:\n${JSON.stringify(jsonSchema)}`;
 
     const vision = await openai.chat.completions.create({
       model: "gpt-4o-mini",
@@ -100,15 +101,17 @@ export async function POST(req: Request) {
         { role: "system", content: SYSTEM_PROMPT_VISION },
         {
           role: "user",
-          content: [
-            { type: "text", text: userPrompt1 },
-            {
-              type: "image_url",
-              image_url: {
-                url: `data:${(file as File).type || "image/jpeg"};base64,${base64}`,
-              },
-            },
-          ],
+          content: wineName
+            ? [{ type: "text", text: userPrompt1 }]
+            : [
+                { type: "text", text: userPrompt1 },
+                {
+                  type: "image_url",
+                  image_url: {
+                    url: `data:${(file as File).type || "image/jpeg"};base64,${base64}`,
+                  },
+                },
+              ],
         },
       ],
     });
