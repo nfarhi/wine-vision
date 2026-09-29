@@ -96,7 +96,6 @@ export async function POST(req: Request) {
 
     const vision = await openai.chat.completions.create({
       model: "gpt-6-luna",
-      temperature: 0.2,
       messages: [
         { role: "system", content: SYSTEM_PROMPT_VISION },
         {
@@ -176,7 +175,6 @@ export async function POST(req: Request) {
       const grounded = await openai.chat.completions.create({
         // The grounding pass is synthesis-only, so the mini model preserves quality while reducing cost.
         model: "gpt-6-luna",
-        temperature: 0.2,
         messages: [
           { role: "system", content: sys },
           { role: "user", content: userPrompt2 },
