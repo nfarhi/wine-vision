@@ -174,7 +174,8 @@ export async function POST(req: Request) {
         `${JSON.stringify(evidence)}\n\nReturn a SINGLE JSON object in the same schema, updating priceEstimate/drinkWindow and adding up to 5 'sources'.`;
 
       const grounded = await openai.chat.completions.create({
-        model: "gpt-4.1",
+        // The grounding pass is synthesis-only, so the mini model preserves quality while reducing cost.
+        model: "gpt-4.1-mini",
         temperature: 0.2,
         messages: [
           { role: "system", content: sys },
